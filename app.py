@@ -1,6 +1,7 @@
+ # For Deployment on Streamlit
 import streamlit as st
 import os
-import torchaudio
+import soundfile as sf
 import torch
 from transformers import Wav2Vec2Processor, Wav2Vec2Model
 import numpy as np
@@ -24,6 +25,7 @@ processor, model = get_model()
 
 # ---- EMBEDDING UTILS ----
 def preprocess_wav(src, dst):
+    import torchaudio  # Only needed for input audio
     waveform, sr = torchaudio.load(src)
     if waveform.shape[0] > 1:
         waveform = waveform.mean(dim=0, keepdim=True)
@@ -31,15 +33,35 @@ def preprocess_wav(src, dst):
         waveform = torchaudio.transforms.Resample(sr, 16000)(waveform)
     torchaudio.save(dst, waveform, 16000)
 
-def extract_short_embedding(file_path, duration_sec=10):
-    waveform, sample_rate = torchaudio.load(file_path)
-    max_samples = int(sample_rate * duration_sec)
-    waveform = waveform[:, :max_samples]
-    if waveform.shape[0] > 1:
-        waveform = waveform.mean(dim=0, keepdim=True)
-    if sample_rate != 16000:
-        waveform = torchaudio.transforms.Resample(sample_rate, 16000)(waveform)
-    inputs = processor(waveform.squeeze().numpy(), sampling_rate=16000, return_tensors="pt")
+def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
+    if use_soundfile:
+        signal, sample_rate = sf.read(file_path)
+        # shape: (n_samples,) or (n_samples, channels)
+        if signal.ndim == 1:
+            waveform = signal[np.newaxis, :]
+        else:
+            waveform = signal.T  # shape: (channels, n_samples)
+        waveform = waveform[:, :int(sample_rate * duration_sec)]
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(axis=0, keepdims=True)
+        if sample_rate != 16000:
+            import torchaudio
+            waveform_tensor = torch.from_numpy(waveform)
+            waveform_tensor = torchaudio.transforms.Resample(sample_rate, 16000)(waveform_tensor)
+            waveform = waveform_tensor.numpy()
+        else:
+            waveform = waveform.astype(np.float32)
+    else:
+        import torchaudio
+        waveform, sample_rate = torchaudio.load(file_path)
+        max_samples = int(sample_rate * duration_sec)
+        waveform = waveform[:, :max_samples]
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+        if sample_rate != 16000:
+            waveform = torchaudio.transforms.Resample(sample_rate, 16000)(waveform)
+        waveform = waveform.numpy()
+    inputs = processor(waveform.squeeze(), sampling_rate=16000, return_tensors="pt")
     with torch.no_grad():
         outputs = model(**inputs)
     embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
@@ -60,7 +82,7 @@ def build_reference_embeddings():
                 load_log.append(f"❌ Missing file: {file}")
                 continue
             try:
-                emb = extract_short_embedding(file, duration_sec=10)
+                emb = extract_short_embedding(file, duration_sec=10, use_soundfile=True)
                 ref_embeds[accent].append(emb)
                 load_log.append(f"✅ Loaded: {file}")
             except Exception as e:
