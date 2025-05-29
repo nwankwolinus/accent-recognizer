@@ -1,1 +1,2 @@
 This repository contains a Streamlit web app that predicts the accent (American, British, Indian, or Nigerian) from a user's YouTube video URL or uploaded audio sample. The app uses pretrained wav2vec2 embeddings and compares extracted features against reference audio samples for each accent. Designed for easy deployment in Colab or on Streamlit Community Cloud.
+<img width="1440" alt="Screenshot 2025-05-29 at 21 17 59" src="https://github.com/user-attachments/assets/04996274-f69b-4d77-a776-1374678bf7d4" />
