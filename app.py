@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import soundfile as sf
+import requests
 import torch
 from transformers import Wav2Vec2Processor, Wav2Vec2Model
 import numpy as np
@@ -13,7 +14,6 @@ REFERENCE_FILES = {
     "nigerian": ["nigerian_1.wav", "nigerian_2.wav", "nigerian_full.wav"],
 }
 
-# ---- MODEL LOADING ----
 @st.cache_resource
 def get_model():
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
@@ -22,7 +22,6 @@ def get_model():
 
 processor, model = get_model()
 
-# ---- EMBEDDING UTILS ----
 def preprocess_wav(src, dst):
     import torchaudio
     waveform, sr = torchaudio.load(src)
@@ -34,7 +33,6 @@ def preprocess_wav(src, dst):
 
 def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
     if use_soundfile:
-        # Make sure we always get float32
         signal, sample_rate = sf.read(file_path, dtype='float32')
         if signal.ndim == 1:
             waveform = signal[np.newaxis, :]
@@ -43,7 +41,6 @@ def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
         waveform = waveform[:, :int(sample_rate * duration_sec)]
         if waveform.shape[0] > 1:
             waveform = waveform.mean(axis=0, keepdims=True)
-        # waveform is already float32
         if sample_rate != 16000:
             import torchaudio
             waveform_tensor = torch.from_numpy(waveform).float()
@@ -71,7 +68,6 @@ def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
 def cosine_similarity(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-# ---- REFERENCE EMBEDDING LOADING ----
 @st.cache_resource
 def build_reference_embeddings():
     ref_embeds = {}
@@ -92,23 +88,20 @@ def build_reference_embeddings():
 
 reference_embeddings, reference_log = build_reference_embeddings()
 
-# ---- YOUTUBE AUDIO DOWNLOAD (PYTUBE) ----
-from pytube import YouTube
-import torchaudio
+def download_file(url, target_path):
+    try:
+        r = requests.get(url, stream=True, timeout=20)
+        r.raise_for_status()
+        with open(target_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
-def download_youtube_audio(url, wav_output):
-    yt = YouTube(url)
-    stream = yt.streams.filter(only_audio=True).first()
-    temp_mp4 = "temp_audio.mp4"
-    stream.download(filename=temp_mp4)
-    # Convert mp4 audio to wav using torchaudio
-    waveform, sr = torchaudio.load(temp_mp4)
-    torchaudio.save(wav_output, waveform, sr)
-    os.remove(temp_mp4)
-
-# ---- STREAMLIT UI ----
-st.title("Accent Recognition from YouTube Video")
-st.write("Paste a YouTube video URL below. The app will extract audio and predict the accent.")
+st.title("Accent Recognition from Audio/Video URL or File")
+st.write("Enter a direct audio/video file URL (ending with .wav, .mp3, .mp4, etc.) or upload a file below.")
 
 st.subheader("Reference File Status")
 for line in reference_log:
@@ -117,40 +110,69 @@ for line in reference_log:
     else:
         st.error(line)
 
-video_url = st.text_input("YouTube video URL:")
+video_url = st.text_input("Audio/Video file URL:")
+uploaded_file = st.file_uploader("Or upload an audio/video file (.wav, .mp3, .mp4)", type=["wav", "mp3", "mp4"])
 
 if st.button("Analyze Accent"):
-    if not video_url.strip():
-        st.warning("Please enter a YouTube URL.")
+    input_audio_path = None
+
+    if video_url.strip():
+        # Check for direct file link
+        if any(video_url.lower().endswith(ext) for ext in [".wav", ".mp3", ".mp4"]):
+            with st.spinner("Downloading file from URL..."):
+                ext = video_url.split('.')[-1]
+                input_file = f"input_audio.{ext}"
+                success, err = download_file(video_url, input_file)
+                if not success:
+                    st.error(f"Download failed: {err}")
+                    st.stop()
+                # If mp3 or mp4, convert to wav for processing
+                if ext in ["mp3", "mp4"]:
+                    import torchaudio
+                    waveform, sr = torchaudio.load(input_file)
+                    torchaudio.save("input_audio.wav", waveform, sr)
+                    input_audio_path = "input_audio.wav"
+                else:
+                    input_audio_path = input_file
+        else:
+            st.error("URL must be a direct link ending with .wav, .mp3, or .mp4")
+            st.stop()
+    elif uploaded_file is not None:
+        with st.spinner("Processing uploaded file..."):
+            ext = uploaded_file.name.split('.')[-1]
+            audio_path = f"uploaded_audio.{ext}"
+            with open(audio_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            if ext in ["mp3", "mp4"]:
+                import torchaudio
+                waveform, sr = torchaudio.load(audio_path)
+                torchaudio.save("input_audio.wav", waveform, sr)
+                input_audio_path = "input_audio.wav"
+            else:
+                input_audio_path = audio_path
+    else:
+        st.warning("Please provide a valid URL or upload a file.")
         st.stop()
 
-    with st.spinner("Downloading and processing audio..."):
-        try:
-            download_youtube_audio(video_url, "input_audio.wav")
-        except Exception as e:
-            st.error(f"Audio download failed: {e}")
-            st.stop()
+    preprocess_wav(input_audio_path, "input_audio.wav")
+    try:
+        input_emb = extract_short_embedding("input_audio.wav", duration_sec=10)
+    except Exception as e:
+        st.error(f"Error processing audio: {e}")
+        st.stop()
 
-        preprocess_wav('input_audio.wav', 'input_audio.wav')
-
-        try:
-            input_emb = extract_short_embedding('input_audio.wav', duration_sec=10)
-        except Exception as e:
-            st.error(f"Error processing input audio: {e}")
-            st.stop()
-
-        scores = {}
-        for accent, embs in reference_embeddings.items():
-            similarities = [cosine_similarity(input_emb, ref_emb) for ref_emb in embs if ref_emb is not None]
-            if len(similarities) > 0:
-                scores[accent] = float(np.mean(similarities))
-            else:
-                scores[accent] = float('-inf')
-
-        if all(v == float('-inf') for v in scores.values()):
-            st.error("No valid reference embeddings found. Check your reference files.")
+    scores = {}
+    for accent, embs in reference_embeddings.items():
+        similarities = [cosine_similarity(input_emb, ref_emb) for ref_emb in embs if ref_emb is not None]
+        if len(similarities) > 0:
+            scores[accent] = float(np.mean(similarities))
         else:
-            predicted_accent = max(scores, key=scores.get)
-            st.success(f"Predicted accent: {predicted_accent}")
-            st.write("Similarity scores:")
-            st.json(scores)
+            scores[accent] = float('-inf')
+
+    if all(v == float('-inf') for v in scores.values()):
+        st.error("No valid reference embeddings found. Check your reference files.")
+    else:
+        predicted_accent = max(scores, key=scores.get)
+        st.success(f"Predicted accent: {predicted_accent}")
+        st.write("Similarity scores:")
+        st.json(scores)
