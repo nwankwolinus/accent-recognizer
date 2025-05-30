@@ -1,4 +1,3 @@
-# For Deployment on Streamlit
 import streamlit as st
 import os
 import soundfile as sf
@@ -25,7 +24,7 @@ processor, model = get_model()
 
 # ---- EMBEDDING UTILS ----
 def preprocess_wav(src, dst):
-    import torchaudio  # Only needed for YouTube input audio
+    import torchaudio
     waveform, sr = torchaudio.load(src)
     if waveform.shape[0] > 1:
         waveform = waveform.mean(dim=0, keepdim=True)
@@ -35,7 +34,7 @@ def preprocess_wav(src, dst):
 
 def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
     if use_soundfile:
-        # Always use float32 to avoid scalar type errors!
+        # Make sure we always get float32
         signal, sample_rate = sf.read(file_path, dtype='float32')
         if signal.ndim == 1:
             waveform = signal[np.newaxis, :]
@@ -44,10 +43,10 @@ def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
         waveform = waveform[:, :int(sample_rate * duration_sec)]
         if waveform.shape[0] > 1:
             waveform = waveform.mean(axis=0, keepdims=True)
-        # waveform is already float32, no need to cast again
+        # waveform is already float32
         if sample_rate != 16000:
             import torchaudio
-            waveform_tensor = torch.from_numpy(waveform).float()  # <--- force float32
+            waveform_tensor = torch.from_numpy(waveform).float()
             waveform_tensor = torchaudio.transforms.Resample(sample_rate, 16000)(waveform_tensor)
             waveform = waveform_tensor.numpy()
         else:
@@ -62,7 +61,6 @@ def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
         if sample_rate != 16000:
             waveform = torchaudio.transforms.Resample(sample_rate, 16000)(waveform)
         waveform = waveform.numpy().astype(np.float32)
-    # 🔥 Ensure float32 tensor for processor
     waveform_tensor = torch.from_numpy(waveform).float()
     inputs = processor(waveform_tensor.squeeze().numpy(), sampling_rate=16000, return_tensors="pt")
     with torch.no_grad():
@@ -94,6 +92,20 @@ def build_reference_embeddings():
 
 reference_embeddings, reference_log = build_reference_embeddings()
 
+# ---- YOUTUBE AUDIO DOWNLOAD (PYTUBE) ----
+from pytube import YouTube
+import torchaudio
+
+def download_youtube_audio(url, wav_output):
+    yt = YouTube(url)
+    stream = yt.streams.filter(only_audio=True).first()
+    temp_mp4 = "temp_audio.mp4"
+    stream.download(filename=temp_mp4)
+    # Convert mp4 audio to wav using torchaudio
+    waveform, sr = torchaudio.load(temp_mp4)
+    torchaudio.save(wav_output, waveform, sr)
+    os.remove(temp_mp4)
+
 # ---- STREAMLIT UI ----
 st.title("Accent Recognition from YouTube Video")
 st.write("Paste a YouTube video URL below. The app will extract audio and predict the accent.")
@@ -113,23 +125,20 @@ if st.button("Analyze Accent"):
         st.stop()
 
     with st.spinner("Downloading and processing audio..."):
-        # Download audio with yt-dlp
-        os.system(f'yt-dlp -x --audio-format wav -o "input_audio.%(ext)s" "{video_url}"')
-
-        # Ensure file exists
-        if not os.path.isfile("input_audio.wav"):
-            st.error("Audio download failed. Make sure yt-dlp is installed and URL is valid.")
+        try:
+            download_youtube_audio(video_url, "input_audio.wav")
+        except Exception as e:
+            st.error(f"Audio download failed: {e}")
             st.stop()
+
         preprocess_wav('input_audio.wav', 'input_audio.wav')
 
-        # Extract embedding from input audio
         try:
             input_emb = extract_short_embedding('input_audio.wav', duration_sec=10)
         except Exception as e:
             st.error(f"Error processing input audio: {e}")
             st.stop()
 
-        # Compute similarities
         scores = {}
         for accent, embs in reference_embeddings.items():
             similarities = [cosine_similarity(input_emb, ref_emb) for ref_emb in embs if ref_emb is not None]
