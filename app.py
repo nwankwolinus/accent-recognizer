@@ -35,7 +35,8 @@ def preprocess_wav(src, dst):
 
 def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
     if use_soundfile:
-        signal, sample_rate = sf.read(file_path)
+        # Always use float32 to avoid scalar type errors!
+        signal, sample_rate = sf.read(file_path, dtype='float32')
         if signal.ndim == 1:
             waveform = signal[np.newaxis, :]
         else:
@@ -43,8 +44,7 @@ def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
         waveform = waveform[:, :int(sample_rate * duration_sec)]
         if waveform.shape[0] > 1:
             waveform = waveform.mean(axis=0, keepdims=True)
-        # Ensure float32 dtype
-        waveform = waveform.astype(np.float32)
+        # waveform is already float32, no need to cast again
         if sample_rate != 16000:
             import torchaudio
             waveform_tensor = torch.from_numpy(waveform)
