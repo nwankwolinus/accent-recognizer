@@ -25,7 +25,7 @@ processor, model = get_model()
 
 # ---- EMBEDDING UTILS ----
 def preprocess_wav(src, dst):
-    import torchaudio  # Only needed for input audio
+    import torchaudio  # Only needed for YouTube input audio
     waveform, sr = torchaudio.load(src)
     if waveform.shape[0] > 1:
         waveform = waveform.mean(dim=0, keepdim=True)
@@ -36,21 +36,20 @@ def preprocess_wav(src, dst):
 def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
     if use_soundfile:
         signal, sample_rate = sf.read(file_path)
-        # shape: (n_samples,) or (n_samples, channels)
         if signal.ndim == 1:
             waveform = signal[np.newaxis, :]
         else:
-            waveform = signal.T  # shape: (channels, n_samples)
+            waveform = signal.T
         waveform = waveform[:, :int(sample_rate * duration_sec)]
         if waveform.shape[0] > 1:
             waveform = waveform.mean(axis=0, keepdims=True)
+        # Ensure float32 dtype
+        waveform = waveform.astype(np.float32)
         if sample_rate != 16000:
             import torchaudio
             waveform_tensor = torch.from_numpy(waveform)
             waveform_tensor = torchaudio.transforms.Resample(sample_rate, 16000)(waveform_tensor)
-            waveform = waveform_tensor.numpy()
-        else:
-            waveform = waveform.astype(np.float32)
+            waveform = waveform_tensor.numpy().astype(np.float32)
     else:
         import torchaudio
         waveform, sample_rate = torchaudio.load(file_path)
@@ -60,7 +59,7 @@ def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
             waveform = waveform.mean(dim=0, keepdim=True)
         if sample_rate != 16000:
             waveform = torchaudio.transforms.Resample(sample_rate, 16000)(waveform)
-        waveform = waveform.numpy()
+        waveform = waveform.numpy().astype(np.float32)
     inputs = processor(waveform.squeeze(), sampling_rate=16000, return_tensors="pt")
     with torch.no_grad():
         outputs = model(**inputs)
