@@ -1,6 +1,7 @@
-soundfile
 streamlit
+soundfile
 transformers
 torch
 torchaudio
 numpy
+yt-dlp
