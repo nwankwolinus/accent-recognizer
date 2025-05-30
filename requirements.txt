@@ -1,7 +1,7 @@
 streamlit
 soundfile
+requests
 transformers
 torch
 torchaudio
 numpy
-pytube
