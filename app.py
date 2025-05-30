@@ -47,9 +47,11 @@ def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
         # waveform is already float32, no need to cast again
         if sample_rate != 16000:
             import torchaudio
-            waveform_tensor = torch.from_numpy(waveform)
+            waveform_tensor = torch.from_numpy(waveform).float()  # <--- force float32
             waveform_tensor = torchaudio.transforms.Resample(sample_rate, 16000)(waveform_tensor)
-            waveform = waveform_tensor.numpy().astype(np.float32)
+            waveform = waveform_tensor.numpy()
+        else:
+            waveform = waveform.astype(np.float32)
     else:
         import torchaudio
         waveform, sample_rate = torchaudio.load(file_path)
@@ -60,14 +62,16 @@ def extract_short_embedding(file_path, duration_sec=10, use_soundfile=False):
         if sample_rate != 16000:
             waveform = torchaudio.transforms.Resample(sample_rate, 16000)(waveform)
         waveform = waveform.numpy().astype(np.float32)
-    inputs = processor(waveform.squeeze(), sampling_rate=16000, return_tensors="pt")
+    # 🔥 Ensure float32 tensor for processor
+    waveform_tensor = torch.from_numpy(waveform).float()
+    inputs = processor(waveform_tensor.squeeze().numpy(), sampling_rate=16000, return_tensors="pt")
     with torch.no_grad():
         outputs = model(**inputs)
     embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
     return embedding
 
 def cosine_similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 # ---- REFERENCE EMBEDDING LOADING ----
 @st.cache_resource
